@@ -1,0 +1,55 @@
+# 버전 태그(v0.1.5 등)를 올리면: 윈도우에서 시험 → exe 빌드 → GitHub 릴리스에 첨부
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 동기화 로직 시험
+        run: dotnet run --project tests/CoreTests -c Release
+
+      - name: exe 빌드
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart('v')
+          if ($ver -notmatch '^\d+\.\d+\.\d+$') { $ver = '0.0.0' }
+          dotnet publish src/MessengerSync -c Release -o dist "-p:Version=$ver"
+          Get-ChildItem docs -Filter *.txt | Copy-Item -Destination dist
+          $hash = (Get-FileHash dist/MessengerSync.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path dist/MessengerSync.exe.sha256 -Value $hash -NoNewline
+          $files = @('dist/MessengerSync.exe') + (Get-ChildItem dist -Filter *.txt | ForEach-Object { $_.FullName })
+          Compress-Archive -Path $files -DestinationPath "dist/MessengerSync-$tag.zip"
+          # 릴리스 설명: CHANGELOG.md 에서 이 버전 부분만
+          $lines = Get-Content CHANGELOG.md -Encoding UTF8
+          $start = [Array]::FindIndex($lines, [Predicate[string]]{ param($l) $l.StartsWith('## ') -and $l.Contains($tag) })
+          $notes = @()
+          if ($start -ge 0) {
+            for ($i = $start + 1; $i -lt $lines.Length -and -not $lines[$i].StartsWith('## '); $i++) { $notes += $lines[$i] }
+          }
+          ($notes -join "`n").Trim() | Set-Content -Path dist/notes.md -Encoding UTF8
+
+      - name: 릴리스 등록
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: dist/notes.md
+          files: |
+            dist/MessengerSync.exe
+            dist/MessengerSync.exe.sha256
+            dist/MessengerSync-${{ github.ref_name }}.zip

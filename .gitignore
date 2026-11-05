@@ -1,0 +1,18 @@
+# 빌드 결과물
+bin/
+obj/
+dist/
+publish/
+*.zip
+*.user
+.vs/
+
+# 절대 올리면 안 되는 것: 구글 로그인 정보, 쪽지 데이터
+client_secret*.json
+token/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.gz
+*.log

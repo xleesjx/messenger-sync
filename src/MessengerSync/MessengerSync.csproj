@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MessengerSync</AssemblyName>
     <RootNamespace>MessengerSync</RootNamespace>
-    <Version>0.1.6</Version>
+    <Version>0.1.7</Version>
     <Product>메신저 동기화</Product>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>

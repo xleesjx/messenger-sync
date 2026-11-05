@@ -33,11 +33,14 @@ public static class Dialogs
             AllowCancel = true,
         };
         var list = new List<TaskDialogButton>();
+        // 윈도우 대화상자는 큰 버튼(명령 링크)과 일반 버튼을 한 창에 섞을 수 없다.
+        // 설명이 붙은 버튼이 하나라도 있으면 모든 버튼을 큰 버튼으로 만든다.
+        var useLinks = buttons.Any(b => b.Contains('|'));
         foreach (var b in buttons)
         {
             var parts = b.Split('|', 2); // "제목|설명" 이면 큰 버튼(명령 링크)
-            TaskDialogButton btn = parts.Length == 2
-                ? new TaskDialogCommandLinkButton(parts[0], parts[1])
+            TaskDialogButton btn = useLinks
+                ? new TaskDialogCommandLinkButton(parts[0], parts.Length == 2 ? parts[1] : null)
                 : new TaskDialogButton(parts[0]);
             list.Add(btn);
             page.Buttons.Add(btn);

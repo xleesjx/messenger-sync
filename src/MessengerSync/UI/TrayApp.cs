@@ -23,6 +23,7 @@ public sealed class TrayApp : ApplicationContext
     private readonly System.Windows.Forms.Timer _updateTimer = new() { Interval = 60 * 60 * 1000 };
     private UpdateInfo? _pendingUpdate;
     private bool _updating;
+    private bool _exiting;
 
     private AppSettings _s;
     private ICloudStorage? _storage;
@@ -417,7 +418,7 @@ public sealed class TrayApp : ApplicationContext
     /// <summary>3초마다: 메신저를 직접 껐는지/켰는지, 올리지 못한 변경이 있는지 확인.</summary>
     private void Watch()
     {
-        if (_pauseItem.Checked || _testing || _launching || _screenLocked || _engine.Busy || !_s.IsComplete) return;
+        if (_exiting || _pauseItem.Checked || _testing || _launching || _screenLocked || _engine.Busy || !_s.IsComplete) return;
         var running = _messenger.IsRunning();
 
         if (_engine.LaunchedByUs && !running)
@@ -534,22 +535,24 @@ public sealed class TrayApp : ApplicationContext
         }
     }
 
+    /// <summary>
+    /// 프로그램 종료: 묻지 않고 메신저 종료 → 업로드 → 끝내기.
+    /// (동기화 없이 끝낼 이유가 거의 없고, 그 선택지는 실수로 누를 위험만 있어서 없앴다)
+    /// </summary>
     private async Task ExitAsync()
     {
-        if (_messenger.IsRunning() && _engine.LaunchedByUs)
-        {
-            var r = Dialogs.Ask("메신저가 켜져 있습니다",
-                "이 프로그램을 끄면 화면 잠금 시 자동 업로드가 되지 않습니다.",
-                TaskDialogIcon.Warning,
-                "메신저 종료 + 업로드 후 끝내기", "프로그램만 끝내기", "취소");
-            if (r == 2 || r < 0) return;
-            if (r == 0) await PushWithProgress("프로그램 종료", unattended: false);
-        }
-        else if (_engine.Busy)
-        {
-            Dialogs.Info("동기화 중입니다", "끝난 뒤에 다시 시도해 주세요.");
-            return;
-        }
+        if (_exiting) return;
+        _exiting = true;
+        Log.Info("프로그램 종료 요청");
+
+        // 진행 중인 동기화가 있으면 끝날 때까지 기다린다 (최대 2분)
+        var until = DateTime.UtcNow.AddMinutes(2);
+        while ((_engine.Busy || _launching || _updating) && DateTime.UtcNow < until)
+            await Task.Delay(300);
+
+        if (_s.IsComplete && (_messenger.IsRunning() || _engine.HasPendingUpload()))
+            await PushWithProgress("프로그램 종료", unattended: true);
+
         Log.Info("프로그램 종료");
         _tray.Visible = false;
         ExitThread();

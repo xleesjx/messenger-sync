@@ -38,6 +38,18 @@ public sealed class AppSettings
     public int DownloadWaitSeconds { get; set; } = 120;
     public int CloseTimeoutSeconds { get; set; } = 15;
     public bool AutoCheckUpdates { get; set; } = true;
+
+    // 자리 비움: 입력이 없으면(또는 화면 보호기가 켜지면) 메신저 종료 → 업로드
+    public bool IdleEnabled { get; set; } = true;
+    public int IdleMinutes { get; set; } = 5;
+    public bool IdleSkipFullscreen { get; set; } = true;
+
+    // Ctrl+Alt+L: 동기화한 뒤 화면 잠금
+    public bool HotkeyEnabled { get; set; } = true;
+
+    // 다른 PC에 업로드 요청했을 때 기다리는 시간
+    public int RemoteWaitSeconds { get; set; } = 180;
+    public int RemotePollSeconds { get; set; } = 5;
     public DateTime? LastUpdateCheckUtc { get; set; }
     public string NotifiedUpdateVersion { get; set; } = "";
 

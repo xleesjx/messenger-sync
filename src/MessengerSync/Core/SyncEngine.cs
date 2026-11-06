@@ -290,8 +290,11 @@ public sealed class SyncEngine
             return false;
         }
 
-        if (otherLock != null && !await _ui.ConfirmLockOverrideAsync(otherLock))
-            return false;
+        if (otherLock != null)
+        {
+            if (!await ResolveOtherLockAsync(storage, otherLock, ct)) return false;
+            cloud = await ReadJsonAsync<CloudState>(storage, CloudFiles.Current, ct); // 그 PC가 방금 올렸을 수 있다
+        }
 
         var st = LoadState();
         var db = _s.DbPath;
@@ -883,11 +886,112 @@ public sealed class SyncEngine
         }
     }
 
+    // ───────────────────────── 다른 PC에 업로드 요청 ─────────────────────────
+
+    /// <summary>
+    /// 다른 PC가 사용 중일 때. 업로드를 요청하면 그 PC 프로그램이 1분 안에 메신저를 끄고 올린다.
+    /// 그 PC의 "사용 중" 표시가 풀리면 계속한다. true = 계속, false = 취소.
+    /// </summary>
+    private async Task<bool> ResolveOtherLockAsync(ICloudStorage storage, LockInfo other, CancellationToken ct)
+    {
+        var noResponse = false;
+        while (true)
+        {
+            var choice = await _ui.AskLockAsync(other, noResponse);
+            if (choice == LockChoice.Cancel) return false;
+            if (choice == LockChoice.Continue)
+            {
+                Log.Warn($"{other.PcName} PC 사용 중 표시를 무시하고 계속합니다.");
+                return true;
+            }
+
+            var req = new UploadRequest
+            {
+                FromDeviceId = _s.DeviceId,
+                FromPcName = _s.PcName,
+                TargetDeviceId = other.DeviceId,
+                RequestedUtc = DateTime.UtcNow,
+            };
+            await storage.WriteTextAsync(CloudFiles.Request, JsonUtil.Serialize(req), ct);
+            Log.Info($"{other.PcName} PC에 업로드 요청");
+
+            var total = Math.Max(5, _s.RemoteWaitSeconds);
+            var started = DateTime.UtcNow;
+            while (true)
+            {
+                var elapsed = (DateTime.UtcNow - started).TotalSeconds;
+                if (elapsed > total) break;
+                Step(0, $"{other.PcName} PC에 업로드를 요청했습니다. 그 PC가 메신저를 끄고 올리기를 기다리는 중... ({elapsed:0}초)",
+                    elapsed / total, $"{other.PcName} 업로드 기다리기");
+                await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, _s.RemotePollSeconds)), ct);
+                var lk = await ReadJsonAsync<LockInfo>(storage, CloudFiles.Lock, ct);
+                if (lk == null || lk.DeviceId != other.DeviceId)
+                {
+                    Log.Info($"{other.PcName} PC가 요청에 응답했습니다 ({(DateTime.UtcNow - started).TotalSeconds:0}초)");
+                    await TryDeleteRequestAsync(storage, ct);
+                    Step(0, $"{other.PcName} PC가 업로드를 마쳤습니다", 1, $"{other.PcName} 업로드 완료");
+                    return true;
+                }
+            }
+            await TryDeleteRequestAsync(storage, ct);
+            Log.Warn($"{other.PcName} PC가 {total}초 동안 응답하지 않았습니다");
+            noResponse = true;
+        }
+    }
+
+    private async Task TryDeleteRequestAsync(ICloudStorage storage, CancellationToken ct)
+    {
+        try { await storage.DeleteTextAsync(CloudFiles.Request, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Log.Warn($"요청 표시를 지우지 못했습니다: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// (요청받는 쪽) 다른 PC가 이 PC에 업로드를 요청했는지 확인한다. 요청이 있으면 표시를 지우고 돌려준다.
+    /// 업로드 자체는 호출한 쪽에서 CloseAndPushAsync 로 한다.
+    /// </summary>
+    public async Task<UploadRequest?> TakeUploadRequestAsync(CancellationToken ct = default)
+    {
+        if (Busy || !_s.IsComplete) return null;
+        var storage = _storage();
+        if (storage.RequiresLogin && !await storage.HasLoginAsync(ct)) return null;
+        var req = await ReadJsonAsync<UploadRequest>(storage, CloudFiles.Request, ct);
+        if (req == null || req.TargetDeviceId != _s.DeviceId) return null;
+        await TryDeleteRequestAsync(storage, ct);
+        if (DateTime.UtcNow - req.RequestedUtc > TimeSpan.FromMinutes(10))
+        {
+            Log.Info($"오래된 업로드 요청은 무시합니다 ({req.FromPcName}, {FileOps.When(req.RequestedUtc)})");
+            return null;
+        }
+        Log.Info($"{req.FromPcName} PC에서 업로드 요청을 받았습니다");
+        return req;
+    }
+
+    /// <summary>메신저를 쓰는 동안 "아직 사용 중" 신호를 남긴다. 다른 PC가 사용 중 표시를 넘겨받았으면 건드리지 않는다.</summary>
+    public async Task HeartbeatAsync(CancellationToken ct = default)
+    {
+        if (Busy || !LaunchedByUs || !_m.IsRunning() || !_s.IsComplete) return;
+        try
+        {
+            var storage = _storage();
+            if (storage.RequiresLogin && !await storage.HasLoginAsync(ct)) return;
+            var lk = await ReadJsonAsync<LockInfo>(storage, CloudFiles.Lock, ct);
+            if (lk != null && lk.DeviceId != _s.DeviceId) return;
+            var now = DateTime.UtcNow;
+            var updated = new LockInfo { DeviceId = _s.DeviceId, PcName = _s.PcName, SinceUtc = lk?.SinceUtc ?? now, LastSeenUtc = now };
+            await storage.WriteTextAsync(CloudFiles.Lock, JsonUtil.Serialize(updated), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warn($"사용 중 신호를 남기지 못했습니다: {ex.Message}");
+        }
+    }
+
     private async Task TryWriteLockAsync(ICloudStorage storage, CancellationToken ct)
     {
         try
         {
-            var lk = new LockInfo { DeviceId = _s.DeviceId, PcName = _s.PcName, SinceUtc = DateTime.UtcNow };
+            var now = DateTime.UtcNow;
+            var lk = new LockInfo { DeviceId = _s.DeviceId, PcName = _s.PcName, SinceUtc = now, LastSeenUtc = now };
             await storage.WriteTextAsync(CloudFiles.Lock, JsonUtil.Serialize(lk), ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

@@ -166,6 +166,67 @@ Check(pcA.Ui.Asked.Contains("Lock"), "A: 사용 중 경고를 받음");
 pcB.Use();
 await pcB.Engine.CloseAndPushAsync("화면 잠금", true);
 
+// ── 다른 PC에 업로드 요청 ──
+{
+    // A가 메신저 사용 중 (사용 중 표시 + 신호)
+    pcA.Use();
+    pcA.Ui.LockAnswer = true;
+    await pcA.Engine.PullAndLaunchAsync(true);
+    await pcA.Engine.HeartbeatAsync();
+    var lockA = pcA.ReadLock();
+    Check(lockA?.PcName == "창의센터" && lockA.LastSeenUtc != null, "신호: 사용 중 표시에 마지막 신호 시각 기록");
+
+    // B가 시작 → A 사용 중 → 업로드 요청. A 대신 1.5초 뒤 "A가 올리고 표시를 지운" 상황을 만든다
+    pcB.Use();
+    pcB.S.RemotePollSeconds = 1;
+    pcB.S.RemoteWaitSeconds = 10;
+    pcB.Ui.Asked.Clear();
+    pcB.Ui.LockChoices.Enqueue(LockChoice.RequestUpload);
+    var cloudStore = new FolderStorage(pcB.S.FolderPath, pcB.S.UserId);
+    var fakeTarget = Task.Run(async () =>
+    {
+        await Task.Delay(1500);
+        var req = JsonUtil.Deserialize<UploadRequest>(await cloudStore.ReadTextAsync(CloudFiles.Request, default));
+        Check(req?.TargetDeviceId == pcA.S.DeviceId && req.FromPcName == "교수부", "요청: B가 A 앞으로 업로드 요청을 남김");
+        await cloudStore.DeleteTextAsync(CloudFiles.Lock, default); // A가 올리고 사용 중 표시를 해제했다고 가정
+    });
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var okB = await pcB.Engine.PullAndLaunchAsync(true);
+    await fakeTarget;
+    Check(okB && sw.Elapsed.TotalSeconds < 8, $"요청: A가 응답하자 B가 바로 계속함 ({sw.Elapsed.TotalSeconds:0.0}초)");
+    Check(await cloudStore.ReadTextAsync(CloudFiles.Request, default) == null, "요청: 끝나면 요청 표시를 지움");
+    await pcB.Engine.CloseAndPushAsync("잠금", true);
+
+    // 응답 없음: 다시 묻고, 그냥 계속 선택
+    pcA.Use();
+    await pcA.Engine.CloseAndPushAsync("잠금", true); // 앞 시험에서 켜 둔 A 메신저 정리
+    await pcA.Engine.PullAndLaunchAsync(true);       // A 사용 중 (사용 중 표시 남김)
+    pcB.Use();
+    pcB.S.RemoteWaitSeconds = 2;
+    pcB.Ui.Asked.Clear();
+    pcB.Ui.LockChoices.Enqueue(LockChoice.RequestUpload);
+    pcB.Ui.LockChoices.Enqueue(LockChoice.Continue);
+    Check(await pcB.Engine.PullAndLaunchAsync(true), "요청: 응답 없으면 다시 물어보고 계속 가능");
+    Check(pcB.Ui.Asked.Count(a => a == "Lock") == 1 && pcB.Ui.Asked.Contains("LockNoResponse"), "요청: '응답하지 않습니다' 질문을 받음");
+    Check(pcB.Ui.LockChoices.Count == 0, "요청: 준비한 답을 모두 사용");
+    await pcB.Engine.CloseAndPushAsync("잠금", true);
+
+    // 요청받는 쪽: 자기 앞으로 온 요청만 가져가고 표시를 지움
+    pcA.Use();
+    await cloudStore.WriteTextAsync(CloudFiles.Request, JsonUtil.Serialize(new UploadRequest
+        { FromDeviceId = pcB.S.DeviceId, FromPcName = "교수부", TargetDeviceId = "다른PC", RequestedUtc = DateTime.UtcNow }), default);
+    Check(await pcA.Engine.TakeUploadRequestAsync() == null, "요청받기: 다른 PC 앞으로 온 요청은 무시");
+    await cloudStore.WriteTextAsync(CloudFiles.Request, JsonUtil.Serialize(new UploadRequest
+        { FromDeviceId = pcB.S.DeviceId, FromPcName = "교수부", TargetDeviceId = pcA.S.DeviceId, RequestedUtc = DateTime.UtcNow }), default);
+    var got = await pcA.Engine.TakeUploadRequestAsync();
+    Check(got?.FromPcName == "교수부", "요청받기: 내 앞으로 온 요청을 가져감");
+    Check(await cloudStore.ReadTextAsync(CloudFiles.Request, default) == null, "요청받기: 가져간 뒤 표시를 지움");
+    await cloudStore.WriteTextAsync(CloudFiles.Request, JsonUtil.Serialize(new UploadRequest
+        { FromDeviceId = pcB.S.DeviceId, FromPcName = "교수부", TargetDeviceId = pcA.S.DeviceId, RequestedUtc = DateTime.UtcNow.AddMinutes(-30) }), default);
+    Check(await pcA.Engine.TakeUploadRequestAsync() == null, "요청받기: 30분 지난 요청은 무시");
+    await pcA.Engine.CloseAndPushAsync("잠금", true);
+}
+
 // ── 손상된 db는 올리지 않음 ──
 pcA.Use();
 pcA.Ui.LockAnswer = true;
@@ -292,7 +353,13 @@ sealed class FakeUi : IUserInteraction
     public Task<LoginChoice> AskLoginAsync(bool expired) { Asked.Add("Login"); return Task.FromResult(LoginChoice.Login); }
     public Task<bool> AskRenewLoginAsync(int days) { Asked.Add("Renew"); return Task.FromResult(false); }
     public Task<bool> AskLaunchOfflineAsync(string error) { Asked.Add("Offline:" + error); return Task.FromResult(false); }
-    public Task<bool> ConfirmLockOverrideAsync(LockInfo other) { Asked.Add("Lock"); return Task.FromResult(LockAnswer); }
+    public Queue<LockChoice> LockChoices { get; } = new();
+    public Task<LockChoice> AskLockAsync(LockInfo other, bool noResponse)
+    {
+        Asked.Add(noResponse ? "LockNoResponse" : "Lock");
+        if (LockChoices.Count > 0) return Task.FromResult(LockChoices.Dequeue());
+        return Task.FromResult(LockAnswer ? LockChoice.Continue : LockChoice.Cancel);
+    }
     public Task<DownloadChoice> AskDownloadAsync(CloudState c, LocalInfo l) { Asked.Add("Download"); return Task.FromResult(DownloadChoice.Download); }
     public Task<ConflictChoice> AskConflictAsync(CloudState c, LocalInfo l, bool first) { Asked.Add(first ? "FirstRun" : "Conflict"); return Task.FromResult(ConflictAnswer); }
     public Task<bool> ConfirmAsync(string h, string t) { Asked.Add("Confirm:" + h); return Task.FromResult(true); }

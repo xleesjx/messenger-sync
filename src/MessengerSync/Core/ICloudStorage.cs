@@ -32,4 +32,5 @@ public static class CloudFiles
     public const string Current = "current.json";
     public const string Lock = "lock.json";
     public const string Devices = "devices.json";
+    public const string Request = "request.json";
 }

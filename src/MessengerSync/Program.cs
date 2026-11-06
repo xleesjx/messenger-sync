@@ -19,10 +19,12 @@ internal static class Program
         var user = Environment.UserName;
         using var mutex = new Mutex(true, $"Local\\MessengerSync_{user}", out var first);
         using var launchSignal = new EventWaitHandle(false, EventResetMode.AutoReset, $"Local\\MessengerSync_Launch_{user}");
+        using var syncLockSignal = new EventWaitHandle(false, EventResetMode.AutoReset, $"Local\\MessengerSync_SyncLock_{user}");
         if (!first)
         {
-            // 이미 트레이에 떠 있으면, 그쪽에 "메신저 실행"을 요청하고 끝낸다.
-            if (!args.Contains("--startup")) launchSignal.Set();
+            // 이미 트레이에 떠 있으면, 그쪽에 요청하고 끝낸다.
+            if (args.Contains("--sync-lock")) syncLockSignal.Set();      // 바탕화면 "동기화 후 잠금" 아이콘
+            else if (!args.Contains("--startup")) launchSignal.Set();    // "메신저 실행"
             return;
         }
 
@@ -38,6 +40,6 @@ internal static class Program
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Error("치명적 오류", e.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("백그라운드 오류", e.Exception); e.SetObserved(); };
 
-        Application.Run(new TrayApp(args, launchSignal));
+        Application.Run(new TrayApp(args, launchSignal, syncLockSignal));
     }
 }

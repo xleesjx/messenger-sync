@@ -47,6 +47,20 @@ public sealed class LockInfo
     public string DeviceId { get; set; } = "";
     public string PcName { get; set; } = "";
     public DateTime SinceUtc { get; set; }
+
+    /// <summary>마지막 "아직 사용 중" 신호 (메신저를 쓰는 동안 10분마다 갱신). 예전 버전은 없음.</summary>
+    public DateTime? LastSeenUtc { get; set; }
+
+    public DateTime LastSignalUtc => LastSeenUtc ?? SinceUtc;
+}
+
+/// <summary>클라우드 request.json: 다른 PC가 "메신저를 끄고 올려 달라"고 남긴 요청.</summary>
+public sealed class UploadRequest
+{
+    public string FromDeviceId { get; set; } = "";
+    public string FromPcName { get; set; } = "";
+    public string TargetDeviceId { get; set; } = "";
+    public DateTime RequestedUtc { get; set; }
 }
 
 /// <summary>클라우드 devices.json 의 한 줄: PC별 마지막 동작.</summary>

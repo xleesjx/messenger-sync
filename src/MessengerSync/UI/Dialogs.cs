@@ -135,14 +135,42 @@ public sealed class WinUi : IUserInteraction
         return Task.FromResult(r == 0);
     }
 
-    public Task<bool> ConfirmLockOverrideAsync(LockInfo other)
+    private static string Ago(DateTime utc)
     {
-        var r = Dialogs.Ask($"{other.PcName} PC에서 사용 중으로 표시되어 있습니다",
-            $"{other.PcName} PC가 {FileOps.When(other.SinceUtc)}부터 메신저를 쓰고 있다고 표시되어 있습니다.\n" +
-            "그 PC의 업로드가 아직 안 됐을 수 있습니다. 그 PC에서 Win+L(잠금)이나 메신저 종료를 먼저 해 주세요.\n\n" +
-            "이미 그 PC를 끄고 왔다면 계속해도 됩니다. 나중에 그 PC 내용과 충돌하면 어느 쪽을 쓸지 묻습니다.",
-            TaskDialogIcon.Warning, "계속", "취소");
-        return Task.FromResult(r == 0);
+        var d = DateTime.UtcNow - utc;
+        if (d < TimeSpan.FromMinutes(1)) return "방금";
+        if (d < TimeSpan.FromHours(1)) return $"{(int)d.TotalMinutes}분 전";
+        if (d < TimeSpan.FromDays(1)) return $"{(int)d.TotalHours}시간 {d.Minutes}분 전";
+        return $"{(int)d.TotalDays}일 전";
+    }
+
+    public Task<LockChoice> AskLockAsync(LockInfo other, bool noResponse)
+    {
+        var pc = other.PcName;
+        // 10분마다 신호를 남기므로, 30분 안에 신호가 있었으면 그 PC가 켜져 있을 가능성이 높다
+        var fresh = other.LastSeenUtc != null && DateTime.UtcNow - other.LastSeenUtc.Value < TimeSpan.FromMinutes(30);
+        var status = $"{pc} PC: {FileOps.When(other.SinceUtc)}부터 사용 · 마지막 신호 {Ago(other.LastSignalUtc)}";
+        string heading, text;
+        if (noResponse)
+        {
+            heading = $"{pc} PC가 응답하지 않습니다";
+            text = $"{status}\n\n업로드를 요청했지만 응답이 없었습니다. 그 PC가 꺼졌거나 절전 상태일 수 있습니다.\n" +
+                   "계속하면 그 PC의 최근 쪽지가 반영되지 않은 채 시작합니다. 나중에 그 PC 내용과 충돌하면 어느 쪽을 쓸지 묻습니다.";
+        }
+        else
+        {
+            heading = $"{pc} PC에서 메신저를 사용 중입니다";
+            text = fresh
+                ? $"{status}\n\n그 PC가 켜져 있는 것 같습니다. 업로드를 요청하면 그 PC가 1분 안에 메신저를 끄고 최신 쪽지를 올립니다. 올라오면 바로 받아서 시작합니다."
+                : $"{status}\n\n한동안 신호가 없었습니다. 그 PC가 꺼졌거나 절전 상태일 수 있습니다. 업로드를 요청해 볼 수도 있고, 그냥 계속할 수도 있습니다.";
+        }
+        var request = $"{pc} PC에 업로드 요청|그 PC가 켜져 있으면 메신저를 끄고 올립니다 (최대 3분 기다림)";
+        var go = "그냥 계속|그 PC의 최근 쪽지 없이 시작합니다";
+        var buttons = fresh && !noResponse ? new[] { request, go, "취소" } : new[] { go, request, "취소" };
+        var r = Dialogs.Ask(heading, text, TaskDialogIcon.Warning, buttons);
+        if (r < 0 || r == 2) return Task.FromResult(LockChoice.Cancel);
+        var chosen = buttons[r];
+        return Task.FromResult(chosen == request ? LockChoice.RequestUpload : LockChoice.Continue);
     }
 
     public Task<DownloadChoice> AskDownloadAsync(CloudState cloud, LocalInfo local)

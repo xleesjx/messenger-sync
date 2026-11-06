@@ -34,14 +34,26 @@ public sealed class TrayApp : ApplicationContext
     private ProgressForm? _progress;
     private ProgressInfo? _lastProgress;
     private bool _screenLocked;
-    private bool _closedByLock;
+
+    // 자리를 비워서(잠금·자리 비움·화면 보호기·다른 PC 요청) 메신저를 끈 상태. 돌아오면 다시 켠다.
+    private bool _closedAway;
+    private string _awayReason = "";
+    private DateTime _awayAtUtc;
+
+    private readonly System.Windows.Forms.Timer _idleTimer = new() { Interval = 2000 };
+    private readonly System.Windows.Forms.Timer _remoteTimer = new() { Interval = 60 * 1000 };
+    private CountdownForm? _countdown;
+    private DateTime _idleSnoozeUntilUtc = DateTime.MinValue;
+    private DateTime _lastHeartbeatUtc = DateTime.MinValue;
+    private bool _remoteChecking;
+    private HotkeyWindow? _hotkey;
     private bool _testing;
     private bool _launching;
     private DateTime _lastRetryUtc = DateTime.MinValue;
     private SettingsForm? _settingsForm;
     private StatusForm? _statusForm;
 
-    public TrayApp(string[] args, EventWaitHandle launchSignal)
+    public TrayApp(string[] args, EventWaitHandle launchSignal, EventWaitHandle syncLockSignal)
     {
         _ui.CreateControl(); // UI 스레드로 작업을 넘기기 위한 핸들
         _s = AppSettings.Load();
@@ -57,6 +69,15 @@ public sealed class TrayApp : ApplicationContext
 
         // 바로가기로 한 번 더 실행하면 → 이미 떠 있는 프로그램이 메신저를 실행
         ThreadPool.RegisterWaitForSingleObject(launchSignal, (_, _) => RunOnUi(LaunchMessengerAsync), null, -1, false);
+        // "동기화 후 잠금" 바탕화면 아이콘(--sync-lock)으로 실행하면
+        ThreadPool.RegisterWaitForSingleObject(syncLockSignal, (_, _) => RunOnUi(SyncThenLockAsync), null, -1, false);
+
+        _idleTimer.Tick += (_, _) => IdleTick();
+        _idleTimer.Start();
+        _remoteTimer.Tick += (_, _) => RunOnUi(RemoteTickAsync);
+        _remoteTimer.Start();
+        _hotkey = new HotkeyWindow(() => RunOnUi(SyncThenLockAsync));
+        ApplyHotkey();
 
         Log.Info($"프로그램 시작 v{SyncEngine.AppVersion} ({_s.PcName}, {_s.Storage}){(args.Contains("--updated") ? " - 업데이트 후 재시작" : "")}");
         Updater.CleanupOld();
@@ -114,6 +135,7 @@ public sealed class TrayApp : ApplicationContext
         menu.Items.Add(_header);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(launch);
+        menu.Items.Add("동기화 후 잠금 (Ctrl+Alt+L)", null, async (_, _) => await SyncThenLockAsync());
         menu.Items.Add("메신저 종료 후 업로드", null, async (_, _) => await CloseAndUploadAsync());
         menu.Items.Add("지금 동기화", null, async (_, _) => await SyncNowAsync());
         menu.Items.Add(new ToolStripSeparator());
@@ -184,6 +206,11 @@ public sealed class TrayApp : ApplicationContext
             return;
         }
         // 업데이트로 다시 시작한 경우에는, 업데이트 전에 메신저가 켜져 있었을 때만(--launch) 다시 켠다
+        if (args.Contains("--sync-lock"))
+        {
+            await SyncThenLockAsync();
+            return;
+        }
         var launch = args.Contains("--launch") || (_s.LaunchMessengerOnStart && !args.Contains("--updated"));
         if (launch) await LaunchMessengerAsync();
     }
@@ -389,14 +416,15 @@ public sealed class TrayApp : ApplicationContext
             {
                 case SessionSwitchReason.SessionLock:
                     _screenLocked = true;
+                    CloseCountdown();
                     Log.Info("화면 잠금 감지");
-                    if (_pauseItem.Checked || !_s.SyncOnLock || !_s.IsComplete) return;
+                    if (_exiting || _pauseItem.Checked || !_s.SyncOnLock || !_s.IsComplete) return;
                     // 받기 확인 창이 떠 있는 중이면 메신저는 아직 안 켜졌다. 여기서 업로드를 예약하면
                     // 잠금 해제 후 메신저가 켜지자마자 꺼지므로 건너뛴다.
                     if (_launching) return;
                     var running = _messenger.IsRunning();
-                    if (!running && !_engine.HasPendingUpload()) return;
-                    _closedByLock = running;
+                    if (!running && !_engine.HasPendingUpload()) return; // 이미 올렸다 (동기화 후 잠금, 자리 비움 등)
+                    if (running) MarkAway("화면 잠금");
                     await PushWithProgress("화면 잠금", unattended: true);
                     UpdateTrayIcon();
                     break;
@@ -405,14 +433,182 @@ public sealed class TrayApp : ApplicationContext
                     _screenLocked = false;
                     Log.Info("잠금 해제 감지");
                     if (_pauseItem.Checked) return;
-                    if (_closedByLock && _s.RelaunchOnUnlock)
-                    {
-                        _closedByLock = false;
-                        await LaunchMessengerAsync();
-                    }
+                    await ReturnFromAwayAsync();
                     break;
             }
         });
+    }
+
+    private void MarkAway(string reason)
+    {
+        _closedAway = true;
+        _awayReason = reason;
+        _awayAtUtc = DateTime.UtcNow;
+    }
+
+    /// <summary>자리로 돌아왔을 때: 자리를 비워서 껐던 메신저를 최신 확인 후 다시 켠다.</summary>
+    private async Task ReturnFromAwayAsync()
+    {
+        if (!_closedAway || !_s.RelaunchOnUnlock) return;
+        _closedAway = false;
+        Log.Info($"자리로 돌아옴 ({_awayReason} 후) → 메신저 다시 실행");
+        await LaunchMessengerAsync();
+    }
+
+    // ───────────── 자리 비움 ─────────────
+
+    /// <summary>2초마다: 입력이 없거나 화면 보호기가 켜졌는지, 자리로 돌아왔는지 확인.</summary>
+    private void IdleTick()
+    {
+        if (_exiting || _pauseItem.Checked || _testing || _launching || _updating || _screenLocked || _engine.Busy || !_s.IsComplete)
+        {
+            if (_screenLocked || _exiting) CloseCountdown();
+            return;
+        }
+        var idle = Win32.IdleTime();
+        var lastInputUtc = DateTime.UtcNow - idle;
+        var running = _messenger.IsRunning();
+
+        // 돌아옴: 자리를 비워 메신저를 끈 뒤에 새 입력이 생김
+        if (_closedAway && !running && lastInputUtc > _awayAtUtc.AddSeconds(3) && !Win32.ScreenSaverRunning())
+        {
+            RunOnUi(ReturnFromAwayAsync);
+            return;
+        }
+
+        if (!_s.IdleEnabled || !running || !_engine.LaunchedByUs)
+        {
+            CloseCountdown();
+            return;
+        }
+
+        if (Win32.ScreenSaverRunning())
+        {
+            CloseCountdown();
+            TriggerAway("화면 보호기");
+            return;
+        }
+
+        var limit = TimeSpan.FromMinutes(Math.Clamp(_s.IdleMinutes, 1, 60));
+        var warnAt = limit - TimeSpan.FromSeconds(30);
+        if (idle < warnAt || DateTime.UtcNow < _idleSnoozeUntilUtc)
+        {
+            CloseCountdown();
+            return;
+        }
+        if (_s.IdleSkipFullscreen && Win32.BusyFullscreen())
+        {
+            CloseCountdown(); // 발표·전체 화면 영상 중에는 자리 비움으로 보지 않는다
+            return;
+        }
+        if (idle >= limit)
+        {
+            CloseCountdown();
+            TriggerAway("자리 비움");
+            return;
+        }
+        if (_countdown == null)
+        {
+            _countdown = new CountdownForm(DateTime.Now + (limit - idle), (int)limit.TotalMinutes);
+            _countdown.UploadNow += () => { CloseCountdown(); TriggerAway("자리 비움 (지금 업로드)"); };
+            _countdown.KeepUsing += () =>
+            {
+                CloseCountdown();
+                _idleSnoozeUntilUtc = DateTime.UtcNow + limit;
+                Log.Info("자리 비움: 계속 사용 선택");
+            };
+            _countdown.Show();
+        }
+    }
+
+    private void CloseCountdown()
+    {
+        if (_countdown == null) return;
+        _countdown.Close();
+        _countdown.Dispose();
+        _countdown = null;
+    }
+
+    private void TriggerAway(string reason)
+    {
+        if (_engine.Busy || _closedAway && !_messenger.IsRunning()) return;
+        Log.Info($"{reason} 감지 → 메신저 종료 후 업로드");
+        MarkAway(reason);
+        RunOnUi(async () => { await PushWithProgress(reason, unattended: true); UpdateTrayIcon(); });
+    }
+
+    // ───────────── 동기화 후 잠금 (Ctrl+Alt+L) ─────────────
+
+    private void ApplyHotkey()
+    {
+        if (_hotkey == null) return;
+        if (!_s.HotkeyEnabled) { _hotkey.Unregister(); return; }
+        if (!_hotkey.Register())
+        {
+            Log.Warn("Ctrl+Alt+L 단축키를 등록하지 못했습니다 (다른 프로그램이 사용 중)");
+            ShowBalloon("단축키를 쓸 수 없습니다", "다른 프로그램이 Ctrl+Alt+L 을 쓰고 있습니다. 트레이 메뉴의 [동기화 후 잠금]을 써 주세요.", true);
+        }
+    }
+
+    /// <summary>메신저 종료 → 업로드 → 끝난 것을 확인한 뒤 화면 잠금. 실패하면 잠그지 않고 알린다.</summary>
+    private async Task SyncThenLockAsync()
+    {
+        if (_exiting || _updating) return;
+        Log.Info("동기화 후 잠금 요청");
+        CloseCountdown();
+        if (!_s.IsComplete)
+        {
+            Win32.LockScreen();
+            return;
+        }
+        var running = _messenger.IsRunning();
+        var o = await PushWithProgress("동기화 후 잠금", unattended: false);
+        if (o is PushOutcome.Uploaded or PushOutcome.NoChange or PushOutcome.Adopted)
+        {
+            if (running) MarkAway("동기화 후 잠금");
+            Win32.LockScreen();
+        }
+        else
+        {
+            Dialogs.Error("업로드하지 못해 잠그지 않았습니다",
+                $"결과: {o}\n트레이 아이콘의 [상태]나 기록 폴더를 확인해 주세요. 그대로 자리를 비우려면 Win+L 을 누르세요.");
+        }
+    }
+
+    // ───────────── 다른 PC의 업로드 요청, 사용 중 신호 ─────────────
+
+    /// <summary>1분마다: 다른 PC가 업로드를 요청했는지 확인하고, 10분마다 "사용 중" 신호를 남긴다.</summary>
+    private async Task RemoteTickAsync()
+    {
+        if (_remoteChecking || _exiting || _testing || _launching || _updating || _engine.Busy || !_s.IsComplete) return;
+        if (!_engine.LaunchedByUs || !_messenger.IsRunning()) return;
+        _remoteChecking = true;
+        try
+        {
+            var req = await _engine.TakeUploadRequestAsync();
+            if (req != null)
+            {
+                CloseCountdown();
+                MarkAway($"{req.FromPcName} PC 요청");
+                ShowBalloon($"{req.FromPcName} PC에서 업로드를 요청했습니다", "메신저를 종료하고 쪽지를 올립니다.", false);
+                await PushWithProgress($"{req.FromPcName} PC 요청", unattended: true);
+                UpdateTrayIcon();
+                return;
+            }
+            if (DateTime.UtcNow - _lastHeartbeatUtc > TimeSpan.FromMinutes(10))
+            {
+                _lastHeartbeatUtc = DateTime.UtcNow;
+                await _engine.HeartbeatAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"업로드 요청 확인 실패: {ex.Message}");
+        }
+        finally
+        {
+            _remoteChecking = false;
+        }
     }
 
     /// <summary>3초마다: 메신저를 직접 껐는지/켰는지, 올리지 못한 변경이 있는지 확인.</summary>
@@ -457,6 +653,7 @@ public sealed class TrayApp : ApplicationContext
             _messenger = new MessengerController(_s);
             var launched = _engine.LaunchedByUs && !idChanged;
             _engine = CreateEngine();
+            ApplyHotkey();
             if (launched && _messenger.IsRunning()) _engine.AdoptRunning(); // 실행 중인 메신저를 계속 맡는다
             Log.Info($"설정 저장 ({_s.PcName}, {_s.Storage}, {_s.UserId})");
             UpdateTrayIcon();
@@ -570,6 +767,10 @@ public sealed class TrayApp : ApplicationContext
         {
             SystemEvents.SessionSwitch -= OnSessionSwitch;
             _watch.Dispose();
+            _idleTimer.Dispose();
+            _remoteTimer.Dispose();
+            _hotkey?.Dispose();
+            CloseCountdown();
             _tray.Dispose();
             _ui.Dispose();
         }

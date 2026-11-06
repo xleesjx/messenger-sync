@@ -29,6 +29,10 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _launchOnStart = new() { Text = "이 프로그램이 시작될 때 메신저도 실행 (동기화 후)", AutoSize = true };
     private readonly CheckBox _askDownload = new() { Text = "클라우드가 더 새로우면 받기 전에 묻기", AutoSize = true };
     private readonly CheckBox _autoStart = new() { Text = "윈도우 시작 시 이 프로그램 실행", AutoSize = true };
+    private readonly CheckBox _idleEnabled = new() { Text = "입력이 없거나 화면 보호기가 켜지면 메신저를 끄고 업로드", AutoSize = true };
+    private readonly NumericUpDown _idleMinutes = new() { Minimum = 1, Maximum = 60, Width = 70 };
+    private readonly CheckBox _idleSkipFull = new() { Text = "발표·전체 화면 영상 중에는 자리 비움으로 보지 않기", AutoSize = true };
+    private readonly CheckBox _hotkey = new() { Text = "Ctrl+Alt+L : 동기화한 뒤 화면 잠금", AutoSize = true };
     private readonly CheckBox _autoUpdate = new() { Text = "새 버전 자동 확인 (하루 1번, 알림만)", AutoSize = true };
 
     private Control[] _apiRows = Array.Empty<Control>();
@@ -134,6 +138,13 @@ public sealed class SettingsForm : Form
         foreach (var c in new Control[] { _syncOnLock, _relaunch, _launchOnStart, _askDownload, _autoStart, _autoUpdate })
             Span(c);
 
+        Section("자리 비움 · 단축키");
+        Span(_idleEnabled);
+        Row("자리 비움 시간", _idleMinutes, new Label { Text = "분 (30초 전에 알림, 화면 보호기는 바로)", AutoSize = true, Anchor = AnchorStyles.Left });
+        Span(_idleSkipFull);
+        Span(_hotkey);
+        Span(Buttons(Btn("바탕화면에 '동기화 후 잠금' 아이콘 만들기", (_, _) => CreateSyncLockShortcut())));
+
         Section("시험");
         Span(Buttons(Btn("메신저 종료 시험", async (_, _) => await DoCloseTest()),
             Btn("기록 폴더 열기", (_, _) => OpenFolder(Paths.LogDir)),
@@ -181,6 +192,10 @@ public sealed class SettingsForm : Form
         _launchOnStart.Checked = _s.LaunchMessengerOnStart;
         _askDownload.Checked = _s.AskBeforeDownload;
         _autoUpdate.Checked = _s.AutoCheckUpdates;
+        _idleEnabled.Checked = _s.IdleEnabled;
+        _idleMinutes.Value = Math.Clamp(_s.IdleMinutes, 1, 60);
+        _idleSkipFull.Checked = _s.IdleSkipFullscreen;
+        _hotkey.Checked = _s.HotkeyEnabled;
         try { _autoStart.Checked = AutoStart.IsEnabled(); } catch { _autoStart.Checked = false; }
     }
 
@@ -204,6 +219,10 @@ public sealed class SettingsForm : Form
         s.LaunchMessengerOnStart = _launchOnStart.Checked;
         s.AskBeforeDownload = _askDownload.Checked;
         s.AutoCheckUpdates = _autoUpdate.Checked;
+        s.IdleEnabled = _idleEnabled.Checked;
+        s.IdleMinutes = (int)_idleMinutes.Value;
+        s.IdleSkipFullscreen = _idleSkipFull.Checked;
+        s.HotkeyEnabled = _hotkey.Checked;
     }
 
     private void UpdateMode()
@@ -342,6 +361,31 @@ public sealed class SettingsForm : Form
         }
         DialogResult = DialogResult.OK;
         Close();
+    }
+
+    /// <summary>바탕화면에 "동기화 후 잠금" 바로가기를 만든다 (exe --sync-lock).</summary>
+    private static void CreateSyncLockShortcut()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath!;
+            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            var path = Path.Combine(desktop, "동기화 후 잠금.lnk");
+            var shellType = Type.GetTypeFromProgID("WScript.Shell") ?? throw new InvalidOperationException("WScript.Shell 을 쓸 수 없습니다.");
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic lnk = shell.CreateShortcut(path);
+            lnk.TargetPath = exe;
+            lnk.Arguments = "--sync-lock";
+            lnk.WorkingDirectory = Path.GetDirectoryName(exe);
+            lnk.IconLocation = exe + ",0";
+            lnk.Description = "메신저를 끄고 쪽지를 올린 뒤 화면을 잠급니다";
+            lnk.Save();
+            Dialogs.Info("아이콘을 만들었습니다", "바탕화면의 '동기화 후 잠금' 아이콘을 누르면\n메신저 종료 → 업로드 → 화면 잠금 순서로 진행합니다.\n작업 표시줄에 고정해 두면 더 편합니다.");
+        }
+        catch (Exception ex)
+        {
+            Dialogs.Error("아이콘을 만들지 못했습니다", ex.Message);
+        }
     }
 
     private static void OpenFolder(string path)

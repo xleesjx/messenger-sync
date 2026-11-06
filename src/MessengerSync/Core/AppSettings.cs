@@ -41,7 +41,9 @@ public sealed class AppSettings
 
     // 자리 비움: 입력이 없으면(또는 화면 보호기가 켜지면) 메신저 종료 → 업로드
     public bool IdleEnabled { get; set; } = true;
-    public int IdleMinutes { get; set; } = 5;
+    public int IdleMinutes { get; set; } = 10;
+    /// <summary>설정 화면에서 자리 비움 시간을 직접 저장했는지. 아니면 기본값이 바뀔 때 따라간다.</summary>
+    public bool IdleMinutesSetByUser { get; set; }
     public bool IdleSkipFullscreen { get; set; } = true;
 
     // Ctrl+Alt+L: 동기화한 뒤 화면 잠금
@@ -83,6 +85,9 @@ public sealed class AppSettings
     {
         var s = JsonUtil.LoadFile<AppSettings>(Paths.SettingsFile);
         if (string.IsNullOrWhiteSpace(s.DeviceId)) s.DeviceId = Guid.NewGuid().ToString("N");
+        // v0.1.8의 기본값 5분은 메신저가 너무 자주 꺼져서 10분(화면 보호기와 같은 시간)으로 바꿨다.
+        // 사용자가 직접 정한 값이 아니면 새 기본값을 따른다.
+        if (!s.IdleMinutesSetByUser && s.IdleMinutes == 5) s.IdleMinutes = 10;
         return s;
     }
 

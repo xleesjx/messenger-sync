@@ -220,6 +220,7 @@ public sealed class SettingsForm : Form
         s.AskBeforeDownload = _askDownload.Checked;
         s.AutoCheckUpdates = _autoUpdate.Checked;
         s.IdleEnabled = _idleEnabled.Checked;
+        if ((int)_idleMinutes.Value != s.IdleMinutes) s.IdleMinutesSetByUser = true;
         s.IdleMinutes = (int)_idleMinutes.Value;
         s.IdleSkipFullscreen = _idleSkipFull.Checked;
         s.HotkeyEnabled = _hotkey.Checked;

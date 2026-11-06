@@ -52,6 +52,21 @@ void Check(bool cond, string name)
     Check(kept.Count == 20 + 27, $"보관: 전체 {kept.Count}개 (최근 20 + 그 이전 날짜별 27)");
 }
 
+// ── 1-3. 설정 이전: v0.1.8 기본값 5분 → 10분 ──
+{
+    var keepRoot = Paths.Root;
+    Paths.Root = Path.Combine(root, "settings-test");
+    File.WriteAllText(Paths.SettingsFile, "{ \"UserId\": \"SN200662\", \"IdleMinutes\": 5 }");
+    Check(AppSettings.Load().IdleMinutes == 10, "설정: 직접 바꾼 적 없는 5분은 10분으로");
+    File.WriteAllText(Paths.SettingsFile, "{ \"UserId\": \"SN200662\", \"IdleMinutes\": 5, \"IdleMinutesSetByUser\": true }");
+    Check(AppSettings.Load().IdleMinutes == 5, "설정: 직접 정한 5분은 그대로");
+    File.WriteAllText(Paths.SettingsFile, "{ \"UserId\": \"SN200662\", \"IdleMinutes\": 15 }");
+    Check(AppSettings.Load().IdleMinutes == 15, "설정: 5분이 아닌 값은 그대로");
+    File.Delete(Paths.SettingsFile);
+    Check(AppSettings.Load().IdleMinutes == 10, "설정: 새로 설치하면 10분");
+    Paths.Root = keepRoot;
+}
+
 // ── 2. PC 두 대 시나리오 ──
 var pcA = new FakePc(root, "창의센터", cloudDir);
 var pcB = new FakePc(root, "교수부", cloudDir);

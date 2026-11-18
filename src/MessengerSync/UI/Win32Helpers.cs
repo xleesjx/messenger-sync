@@ -56,11 +56,12 @@ public static class Win32
     private static extern bool LockWorkStation();
 }
 
-/// <summary>전역 단축키(Ctrl+Alt+L)를 받는 보이지 않는 창.</summary>
+/// <summary>전역 단축키(Ctrl+Alt+Shift+L)를 받는 보이지 않는 창. (Ctrl+Alt+L 은 다른 프로그램과 겹쳐서 바꿈)</summary>
 public sealed class HotkeyWindow : NativeWindow, IDisposable
 {
     private const int WM_HOTKEY = 0x0312;
-    private const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_NOREPEAT = 0x4000;
+    private const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_NOREPEAT = 0x4000;
+    public const string Display = "Ctrl+Alt+Shift+L";
     private const int Id = 0x4D53; // "MS"
     private readonly Action _onPressed;
     private bool _registered;
@@ -71,11 +72,11 @@ public sealed class HotkeyWindow : NativeWindow, IDisposable
         CreateHandle(new CreateParams());
     }
 
-    /// <summary>Ctrl+Alt+L 등록. 다른 프로그램이 이미 쓰고 있으면 false.</summary>
+    /// <summary>Ctrl+Alt+Shift+L 등록. 다른 프로그램이 이미 쓰고 있으면 false.</summary>
     public bool Register()
     {
         if (_registered) return true;
-        _registered = RegisterHotKey(Handle, Id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.L);
+        _registered = RegisterHotKey(Handle, Id, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, (uint)Keys.L);
         return _registered;
     }
 

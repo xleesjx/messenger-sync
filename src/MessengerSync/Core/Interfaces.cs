@@ -40,7 +40,7 @@ public interface IUserInteraction
     Task<bool> AskRenewLoginAsync(int daysSinceLogin);
     Task<bool> AskLaunchOfflineAsync(string error);
     /// <summary>다른 PC가 사용 중일 때: 그 PC에 업로드 요청 / 그냥 계속 / 취소. noResponse 면 요청했지만 응답이 없었던 뒤.</summary>
-    Task<LockChoice> AskLockAsync(LockInfo other, bool noResponse);
+    Task<LockChoice> AskLockAsync(LockInfo other, CloudState? cloud, LocalInfo local, bool noResponse);
     Task<DownloadChoice> AskDownloadAsync(CloudState cloud, LocalInfo local);
     Task<ConflictChoice> AskConflictAsync(CloudState cloud, LocalInfo local, bool firstRunOnThisPc);
     Task<bool> ConfirmAsync(string heading, string text);

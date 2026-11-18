@@ -135,7 +135,7 @@ public sealed class TrayApp : ApplicationContext
         menu.Items.Add(_header);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(launch);
-        menu.Items.Add("동기화 후 잠금 (Ctrl+Alt+L)", null, async (_, _) => await SyncThenLockAsync());
+        menu.Items.Add("동기화 후 잠금 (Ctrl+Alt+Shift+L)", null, async (_, _) => await SyncThenLockAsync());
         menu.Items.Add("메신저 종료 후 업로드", null, async (_, _) => await CloseAndUploadAsync());
         menu.Items.Add("지금 동기화", null, async (_, _) => await SyncNowAsync());
         menu.Items.Add(new ToolStripSeparator());
@@ -537,7 +537,7 @@ public sealed class TrayApp : ApplicationContext
         RunOnUi(async () => { await PushWithProgress(reason, unattended: true); UpdateTrayIcon(); });
     }
 
-    // ───────────── 동기화 후 잠금 (Ctrl+Alt+L) ─────────────
+    // ───────────── 동기화 후 잠금 (Ctrl+Alt+Shift+L) ─────────────
 
     private void ApplyHotkey()
     {
@@ -545,8 +545,8 @@ public sealed class TrayApp : ApplicationContext
         if (!_s.HotkeyEnabled) { _hotkey.Unregister(); return; }
         if (!_hotkey.Register())
         {
-            Log.Warn("Ctrl+Alt+L 단축키를 등록하지 못했습니다 (다른 프로그램이 사용 중)");
-            ShowBalloon("단축키를 쓸 수 없습니다", "다른 프로그램이 Ctrl+Alt+L 을 쓰고 있습니다. 트레이 메뉴의 [동기화 후 잠금]을 써 주세요.", true);
+            Log.Warn("Ctrl+Alt+Shift+L 단축키를 등록하지 못했습니다 (다른 프로그램이 사용 중)");
+            ShowBalloon("단축키를 쓸 수 없습니다", "다른 프로그램이 Ctrl+Alt+Shift+L 을 쓰고 있습니다. 트레이 메뉴의 [동기화 후 잠금]을 써 주세요.", true);
         }
     }
 

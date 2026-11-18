@@ -31,7 +31,8 @@ public sealed class AppSettings
     public int KeepVersions { get; set; } = 20;
     public int KeepDailyDays { get; set; } = 30;
     public int KeepLocalBackups { get; set; } = 10;
-    public bool SyncOnLock { get; set; } = true;
+    /// <summary>Win+L 잠금 시 메신저 종료 → 업로드. 메신저가 자주 꺼져 문의가 늘어서 v0.1.10부터 기본 꺼짐.</summary>
+    public bool SyncOnLock { get; set; } = false;
     public bool RelaunchOnUnlock { get; set; } = true;
     public bool LaunchMessengerOnStart { get; set; } = true;
     public bool AskBeforeDownload { get; set; } = true;
@@ -40,13 +41,13 @@ public sealed class AppSettings
     public bool AutoCheckUpdates { get; set; } = true;
 
     // 자리 비움: 입력이 없으면(또는 화면 보호기가 켜지면) 메신저 종료 → 업로드
-    public bool IdleEnabled { get; set; } = true;
+    public bool IdleEnabled { get; set; } = false;
     public int IdleMinutes { get; set; } = 10;
     /// <summary>설정 화면에서 자리 비움 시간을 직접 저장했는지. 아니면 기본값이 바뀔 때 따라간다.</summary>
     public bool IdleMinutesSetByUser { get; set; }
     public bool IdleSkipFullscreen { get; set; } = true;
 
-    // Ctrl+Alt+L: 동기화한 뒤 화면 잠금
+    // Ctrl+Alt+Shift+L: 동기화한 뒤 화면 잠금
     public bool HotkeyEnabled { get; set; } = true;
 
     // 다른 PC에 업로드 요청했을 때 기다리는 시간
@@ -81,9 +82,23 @@ public sealed class AppSettings
 
     [JsonIgnore] public bool IsComplete => Validate().Count == 0;
 
+    /// <summary>설정 파일 형식 번호. 기본값을 바꿀 때 예전 파일을 한 번만 고치기 위해 쓴다.</summary>
+    public int SettingsVersion { get; set; }
+    public const int CurrentSettingsVersion = 2;
+
     public static AppSettings Load()
     {
+        var isNew = !File.Exists(Paths.SettingsFile);
         var s = JsonUtil.LoadFile<AppSettings>(Paths.SettingsFile);
+        if (isNew) s.SettingsVersion = CurrentSettingsVersion;
+        if (s.SettingsVersion < 2)
+        {
+            // v0.1.10: 잠금·자리 비움 때 메신저를 자동으로 끄면 오프라인 상태가 잦아 문의가 늘었다.
+            // 기본은 끄고, 동기화는 Ctrl+Alt+Shift+L 습관으로 한다. (이후 사용자가 다시 켜면 그대로 둔다)
+            s.SyncOnLock = false;
+            s.IdleEnabled = false;
+            s.SettingsVersion = 2;
+        }
         if (string.IsNullOrWhiteSpace(s.DeviceId)) s.DeviceId = Guid.NewGuid().ToString("N");
         // v0.1.8의 기본값 5분은 메신저가 너무 자주 꺼져서 10분(화면 보호기와 같은 시간)으로 바꿨다.
         // 사용자가 직접 정한 값이 아니면 새 기본값을 따른다.

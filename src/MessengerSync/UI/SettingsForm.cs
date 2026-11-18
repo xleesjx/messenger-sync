@@ -24,15 +24,15 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _keepVersions = new() { Minimum = 3, Maximum = 200, Width = 70 };
     private readonly NumericUpDown _keepDaily = new() { Minimum = 0, Maximum = 365, Width = 70 };
     private readonly NumericUpDown _keepBackups = new() { Minimum = 1, Maximum = 100, Width = 70 };
-    private readonly CheckBox _syncOnLock = new() { Text = "화면 잠금(Win+L) 시 메신저를 끄고 업로드", AutoSize = true };
+    private readonly CheckBox _syncOnLock = new() { Text = "화면 잠금(Win+L) 시 메신저를 끄고 업로드 (메신저가 자주 꺼짐, 기본 꺼짐)", AutoSize = true };
     private readonly CheckBox _relaunch = new() { Text = "잠금 해제 시 최신 데이터를 확인하고 메신저 다시 실행", AutoSize = true };
     private readonly CheckBox _launchOnStart = new() { Text = "이 프로그램이 시작될 때 메신저도 실행 (동기화 후)", AutoSize = true };
     private readonly CheckBox _askDownload = new() { Text = "클라우드가 더 새로우면 받기 전에 묻기", AutoSize = true };
     private readonly CheckBox _autoStart = new() { Text = "윈도우 시작 시 이 프로그램 실행", AutoSize = true };
-    private readonly CheckBox _idleEnabled = new() { Text = "입력이 없거나 화면 보호기가 켜지면 메신저를 끄고 업로드", AutoSize = true };
+    private readonly CheckBox _idleEnabled = new() { Text = "입력이 없거나 화면 보호기가 켜지면 메신저를 끄고 업로드 (기본 꺼짐)", AutoSize = true };
     private readonly NumericUpDown _idleMinutes = new() { Minimum = 1, Maximum = 60, Width = 70 };
     private readonly CheckBox _idleSkipFull = new() { Text = "발표·전체 화면 영상 중에는 자리 비움으로 보지 않기", AutoSize = true };
-    private readonly CheckBox _hotkey = new() { Text = "Ctrl+Alt+L : 동기화한 뒤 화면 잠금", AutoSize = true };
+    private readonly CheckBox _hotkey = new() { Text = "Ctrl+Alt+Shift+L : 동기화한 뒤 화면 잠금", AutoSize = true };
     private readonly CheckBox _autoUpdate = new() { Text = "새 버전 자동 확인 (하루 1번, 알림만)", AutoSize = true };
 
     private Control[] _apiRows = Array.Empty<Control>();

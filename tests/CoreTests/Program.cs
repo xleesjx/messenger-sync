@@ -64,6 +64,17 @@ void Check(bool cond, string name)
     Check(AppSettings.Load().IdleMinutes == 15, "설정: 5분이 아닌 값은 그대로");
     File.Delete(Paths.SettingsFile);
     Check(AppSettings.Load().IdleMinutes == 10, "설정: 새로 설치하면 10분");
+
+    // v0.1.10: 잠금·자리 비움 자동 업로드 기본 꺼짐
+    File.WriteAllText(Paths.SettingsFile, "{ \"UserId\": \"SN200662\", \"SyncOnLock\": true, \"IdleEnabled\": true }");
+    var old = AppSettings.Load();
+    Check(!old.SyncOnLock && !old.IdleEnabled && old.SettingsVersion == 2, "설정: 예전 설정의 잠금·자리 비움 자동 업로드를 끔");
+    old.SyncOnLock = true;
+    old.Save();
+    Check(AppSettings.Load().SyncOnLock, "설정: 그 뒤 사용자가 다시 켜면 그대로 유지");
+    File.Delete(Paths.SettingsFile);
+    var fresh = AppSettings.Load();
+    Check(!fresh.SyncOnLock && !fresh.IdleEnabled && fresh.HotkeyEnabled, "설정: 새로 설치하면 자동 업로드 꺼짐, 단축키 켜짐");
     Paths.Root = keepRoot;
 }
 
@@ -116,27 +127,32 @@ Check(pcA.ReadCloud()?.Version == 3, "클라우드는 그대로 v3");
 // ── 진행 단계 표시 ──
 {
     var seen = new List<ProgressInfo>();
-    pcA.Engine.Progress += seen.Add;
+    // 진행률 알림은 다른 스레드에서 조금 늦게 올 수 있다 (실제 프로그램은 화면 스레드로 모아서 처리)
+    void OnProgress(ProgressInfo p) { lock (seen) seen.Add(p); }
+    ProgressInfo Last() { lock (seen) return seen.Where(x => x.Finished).Last(); }
+    pcA.Engine.Progress += OnProgress;
     pcA.Use();
     await pcA.Engine.PullAndLaunchAsync(true);   // 변경 없음 → 실행
-    var last = seen[^1];
+    var last = Last();
     Console.WriteLine("      받기: " + string.Join(" | ", last.Steps.Zip(last.States, (a, b) => $"{a}:{b}")));
     Check(last.Finished && last.Success, "진행: 실행 작업 성공으로 끝남");
     Check(last.States[2] == StepState.Skipped && last.States[3] == StepState.Done, "진행: 변경 없음이면 동기화 건너뜀, 메신저 실행 완료");
-    seen.Clear();
+    lock (seen) seen.Clear();
     pcA.AddMessages(1);
     await pcA.Engine.CloseAndPushAsync("화면 잠금", true);
-    last = seen[^1];
+    await Task.Delay(300);
+    last = Last();
     Console.WriteLine("      잠금: " + string.Join(" | ", last.Steps.Zip(last.States, (a, b) => $"{a}:{b}")));
     Check(last.Success && last.States.All(x => x == StepState.Done), "진행: 잠금 업로드는 5단계 모두 완료");
-    Check(seen.Any(x => x.Current == 3 && x.Percent is > 0 and <= 1), "진행: 업로드 단계에 진행률 표시");
-    seen.Clear();
+    bool hasPct; lock (seen) hasPct = seen.Any(x => x.Current == 3 && x.Percent is > 0 and <= 1);
+    Check(hasPct, "진행: 업로드 단계에 진행률 표시");
+    lock (seen) seen.Clear();
     await pcA.Engine.PullAndLaunchAsync(true);
     await pcA.Engine.CloseAndPushAsync("화면 잠금", true); // 변경 없음
-    last = seen[^1];
+    last = Last();
     Console.WriteLine("      변경없음: " + string.Join(" | ", last.Steps.Zip(last.States, (a, b) => $"{a}:{b}")));
     Check(last.States[2] == StepState.Skipped && last.States[3] == StepState.Skipped, "진행: 변경 없으면 압축·업로드 건너뜀");
-    pcA.Engine.Progress -= seen.Add;
+    pcA.Engine.Progress -= OnProgress;
 }
 
 // ── 질문하신 상황: A에서 올린 뒤, B가 동기화 없이 메신저를 켜서 부재중 쪽지를 받음 ──
@@ -369,7 +385,7 @@ sealed class FakeUi : IUserInteraction
     public Task<bool> AskRenewLoginAsync(int days) { Asked.Add("Renew"); return Task.FromResult(false); }
     public Task<bool> AskLaunchOfflineAsync(string error) { Asked.Add("Offline:" + error); return Task.FromResult(false); }
     public Queue<LockChoice> LockChoices { get; } = new();
-    public Task<LockChoice> AskLockAsync(LockInfo other, bool noResponse)
+    public Task<LockChoice> AskLockAsync(LockInfo other, CloudState? cloud, LocalInfo local, bool noResponse)
     {
         Asked.Add(noResponse ? "LockNoResponse" : "Lock");
         if (LockChoices.Count > 0) return Task.FromResult(LockChoices.Dequeue());

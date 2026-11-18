@@ -109,6 +109,7 @@ public sealed class LocalInfo
     public long Size { get; set; }
     public DateTime? ModifiedLocal { get; set; }
     public int BaseVersion { get; set; }
+    public DateTime? LastSyncUtc { get; set; }
 }
 
 public sealed class Overview

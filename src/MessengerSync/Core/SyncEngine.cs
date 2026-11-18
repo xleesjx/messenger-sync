@@ -292,7 +292,7 @@ public sealed class SyncEngine
 
         if (otherLock != null)
         {
-            if (!await ResolveOtherLockAsync(storage, otherLock, ct)) return false;
+            if (!await ResolveOtherLockAsync(storage, otherLock, cloud, ct)) return false;
             cloud = await ReadJsonAsync<CloudState>(storage, CloudFiles.Current, ct); // 그 PC가 방금 올렸을 수 있다
         }
 
@@ -854,6 +854,7 @@ public sealed class SyncEngine
             Size = fi.Exists ? fi.Length : 0,
             ModifiedLocal = fi.Exists ? fi.LastWriteTime : null,
             BaseVersion = st.BaseVersion,
+            LastSyncUtc = st.LastSyncUtc,
         };
     }
 
@@ -892,12 +893,12 @@ public sealed class SyncEngine
     /// 다른 PC가 사용 중일 때. 업로드를 요청하면 그 PC 프로그램이 1분 안에 메신저를 끄고 올린다.
     /// 그 PC의 "사용 중" 표시가 풀리면 계속한다. true = 계속, false = 취소.
     /// </summary>
-    private async Task<bool> ResolveOtherLockAsync(ICloudStorage storage, LockInfo other, CancellationToken ct)
+    private async Task<bool> ResolveOtherLockAsync(ICloudStorage storage, LockInfo other, CloudState? cloud, CancellationToken ct)
     {
         var noResponse = false;
         while (true)
         {
-            var choice = await _ui.AskLockAsync(other, noResponse);
+            var choice = await _ui.AskLockAsync(other, cloud, GetLocalInfo(), noResponse);
             if (choice == LockChoice.Cancel) return false;
             if (choice == LockChoice.Continue)
             {
